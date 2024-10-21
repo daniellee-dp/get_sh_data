@@ -1,0 +1,129 @@
+#!/bin/bash
+
+local_test="ns"
+## egrep regex string of owned IP space
+local_ips="172.233.17.158,172.233.24.93,170.187.181.98,170.187.181.117,172.105.17.28,172.105.19.101,192.168.129.88,172.105.106.12,172.105.110.6,192.168.135.126,45.33.119.92,69.164.198.18,198.58.96.208,198.58.127.125,192.168.169.240,45.33.2.170,45.33.114.180,96.126.113.103,198.58.126.118,192.168.218.178,23.239.31.202,45.33.13.245,173.255.202.211,198.58.113.99,192.168.167.101,23.239.28.75,45.79.29.249,50.116.30.232,104.237.136.127,192.168.177.151,45.33.30.185,45.56.69.150,45.79.33.172,198.58.116.74,192.168.159.204,45.33.118.160,66.228.55.89,198.58.114.16,198.58.115.186,192.168.225.98,50.116.18.100,173.255.202.79,198.58.106.108,198.58.115.49,192.168.231.145,45.33.6.100,45.79.30.119,45.79.48.52,66.228.55.6,192.168.183.149,45.79.15.85,72.14.181.48,104.237.139.163,192.53.167.112,192.168.175.76,23.239.28.105,45.56.120.234,45.79.18.161,72.14.182.189,192.168.166.122,80.85.87.183,109.74.199.55,178.79.144.193,178.79.190.104,192.168.205.66,109.74.202.84,139.162.240.170,176.58.96.134,178.79.186.170,192.168.140.76,88.80.186.160,139.162.234.54,178.79.178.245,213.52.128.70,192.168.195.30,139.162.231.149,212.71.247.108"
+## name server domains owned by brand, considered local
+## for ns1/ns2.domain.com, enter "domain.com"
+## e.g local_ns="domain.com|whitelabelbrand.com|somens.com"
+local_ns="fcomet.com|myfcloud.com|myfcloudin.com|myfcloudto.com|myfcloudau.com|myfcloudtx.com|myfcloudfr.com|myfcloudat.com|myfcloudnw.com|myfclouduk.com|myfcloudsg.com|myfcloudde.com|myfcloudjp.com|myfcloudch.com|myfcloudla.com|myfcloudmi.com|myfcloudwa.com|myfclouddc.com|myfcloudoc.com|myfcloudtn.com|myfcloudid.com|myfcloudse.com|myfcloudnl.com|myfcloudit.com|myfcloudps.com|myfcloudbr.com|mysafedns.com"
+if [ "$1" ]; then
+	local_ns="$1"
+fi
+
+## probably don't need to edit below this point
+timeout=1
+tries=1
+resolvers="74.82.42.42 209.244.0.4 4.2.2.2 8.8.8.8 8.8.4.4 209.244.0.3 209.244.0.4"
+host=`hostname`
+tmpf="/tmp/.wk$$"
+
+for i in `egrep -H OWNER= /var/cpanel/users/* | tr '/:=' ' ' | awk '{print$4":"$6}'`; do
+        user=`echo $i | cut -d':' -f1`
+        owner=`echo $i | cut -d':' -f2`
+        if [ -f "/var/cpanel/users/$user" ] && [ -d "/var/cpanel/userdata/$user" ]; then
+                suspended=`egrep SUSPENDED=1 /var/cpanel/users/$user`
+		if [ -z "$suspended" ]; then
+			status=1
+		else
+			status=0
+		fi
+                assigned_ip=`egrep IP= /var/cpanel/users/$user | cut -d'=' -f2`
+                plan=`egrep PLAN= /var/cpanel/users/$user | cut -d'=' -f2`
+		contact=`egrep CONTACTEMAIL= /var/cpanel/users/$user | cut -d'=' -f2`
+		if [ -z "$contact" ]; then
+			contact=unset
+		fi
+                # main domain
+                domain=`egrep main_domain /var/cpanel/userdata/$user/main | awk '{print$2}'`
+                echo "$host,$owner,$user,$contact,$status,parent,$domain,$domain,$assigned_ip"
+                # addons
+                for addon in `cat /var/cpanel/userdata/$user/main | egrep -v cp_php_magic_include_path.conf | awk '/addon_domains/{f=1;next}/main_domain/{f=0}f' | awk '{print$1}' | tr -d ':'`; do
+                        echo "$host,$owner,$user,$contact,$status,addon,$domain,$addon,$assigned_ip"
+                done
+                unset suspended unset status
+        fi
+done > $tmpf.userstubs
+
+for i in `cat $tmpf.userstubs`; do
+	host=`echo $i | cut -d',' -f1`
+	owner=`echo $i | cut -d',' -f2`
+	user=`echo $i | cut -d',' -f3`
+	contact=`echo $i | cut -d',' -f4`
+	status=`echo $i | cut -d',' -f5`
+	type=`echo $i | cut -d',' -f6`
+	pdomain=`echo $i | cut -d',' -f7`
+	domain=`echo $i | cut -d',' -f8`
+	assigned_ip=`echo $i | cut -d',' -f9`
+	prefix="$i"
+	if [ "$domain" ]; then
+		resolv=`echo "$resolvers" | tr ' ' '\n' | awk 'BEGIN{srand();} {printf "%06d %s\n", rand()*1000000, $0;}' | head -n1 | awk '{print$2}'`
+		domain_ip=`dig +time=$timeout +tries=$tries +short $domain @$resolv | head -n1`
+		errcheck=`echo $domain_ip | egrep 'connection timed out'`
+		if [ "$errcheck" ]; then
+			resolv=`echo "$resolvers" | tr ' ' '\n' | grep -v "$resolv" | awk 'BEGIN{srand();} {printf "%06d %s\n", rand()*1000000, $0;}' | head -n1 | awk '{print$2}'`
+			domain_ip=`dig +time=$timeout +tries=$tries +short $domain @$resolv | head -n1`
+			unset errcheck
+			errcheck=`echo $domain_ip | egrep 'connection timed out'`
+		fi
+		if [ -z "$domain_ip" ] || [ "$errcheck" ]; then
+			domain_ip="nxdom"
+		fi
+		if [ "$domain_ip" == "$assigned_ip" ]; then
+			hosted="lhost"
+		else
+			hosted="rhost"
+		fi
+		if [ "$domain_ip" == "nxdom" ]; then
+			ns="nxdom"
+			ns_ip="nxdom"
+			ns_iplr="nxdom"
+			hosted="zombie"
+		else
+			resolv=`echo "$resolvers" | tr ' ' '\n' | awk 'BEGIN{srand();} {printf "%06d %s\n", rand()*1000000, $0;}' | head -n1 | awk '{print$2}'`
+			ns=`dig +time=$timeout +tries=$tries $domain @$resolv NS | egrep '.*IN.*NS.*' | awk '{print$5}' | egrep -v '^$' | sed 's/.$//' | head -n1`
+			errcheck=`echo $ns | egrep 'connection timed out'`
+			if [ "$errcheck" ]; then
+				resolv=`echo "$resolvers" | tr ' ' '\n' | grep -v "$resolv" | awk 'BEGIN{srand();} {printf "%06d %s\n", rand()*1000000, $0;}' | head -n1 | awk '{print$2}'`
+				ns=`dig +time=$timeout +tries=$tries $domain @$resolv NS | egrep '.*IN.*NS.*' | awk '{print$5}' | egrep -v '^$' | sed 's/.$//' | head -n1`
+				unset errcheck
+				errcheck=`echo $ns | egrep 'connection timed out'`
+			fi
+			if [ -z "$errcheck" ]; then
+				ns_ip=`dig +time=$timeout +tries=$tries +short $ns @$resolv | head -n1`
+				errcheck=`echo $ns_ip | egrep 'connection timed out'`
+				if [ "$errcheck" ]; then
+					resolv=`echo "$resolvers" | tr ' ' '\n' | grep -v "$resolv" | awk 'BEGIN{srand();} {printf "%06d %s\n", rand()*1000000, $0;}' | head -n1 | awk '{print$2}'`
+					ns_ip=`dig +time=$timeout +tries=$tries +short $ns @$resolv | head -n1`
+					unset errcheck
+					errcheck=`echo $ns_ip | egrep 'connection timed out'`
+				fi
+			else
+				ns="nxdom"
+				ns_ip="nxdom"
+			fi
+			if [ "$ns_ip" == "nxdom" ] || [ "$ns" == "nxdom" ] || [ "$domain_ip" ==  "nxdom" ]; then
+				ns_iplr=nxdom
+			else
+				if [ "$local_test" == "ns" ]; then
+					ns_iplr=`echo $ns | egrep "$local_ns"`
+					if [ "$ns_iplr" ]; then
+						ns_iplr=local
+					else
+						ns_iplr=remote
+					fi
+				else
+					ns_iplr=`echo $ns_ip | egrep "$local_ips"`
+					if [ "$ns_iplr" ]; then
+						ns_iplr=local
+					else
+						ns_iplr=remote
+					fi
+				fi
+			fi
+		fi
+		echo "$prefix,$domain_ip,$hosted,$ns,$ns_ip,$ns_iplr"
+	fi
+done
+
+rm -f $tmpf.*
